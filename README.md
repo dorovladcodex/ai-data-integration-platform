@@ -1,69 +1,78 @@
-# AI-Driven Data Integration Platform
+# AI-Assisted Data Integration
+### From a Jira request to a review-ready integration change
 
-**An architecture case study in making enterprise data-pipeline onboarding less manual.**
+Onboarding a data source often involves more manual coordination than new ETL code: read the request, check a connection, discover the schema, prepare mappings, update configuration and send the changes for review.
 
-The ETL frameworks already exist. The difficult part is often everything around them: understanding a Jira request, checking a source connection, retrieving schemas, generating mappings, updating configs, and preparing the change for review.
+This case study shows how an AI orchestrator can handle that preparation by calling existing data engineering tools. The ingestion frameworks remain responsible for moving and transforming data.
 
-This project explores a practical approach to that problem: a **skill-driven AI orchestrator** that works with existing data engineering tools instead of asking an LLM to invent new pipelines from scratch.
+## Experience behind the design
 
-> **Scope:** This is an independent, architecture-only reference design inspired by hands-on work with enterprise data integration. It is **not** an exported production system, a working deployment, or a copy of an employer's internal implementation. All names and examples are generic.
+I contributed to the design and initial rollout of AI-assisted onboarding for two enterprise integration frameworks: legacy databases and SAP BW file delivery. Both were brought into use during my involvement. The early workflows worked, encountered errors and required engineering intervention.
 
-## The idea
+This portfolio reconstructs the integration patterns at a generic level and proposes a more explicit design for durable execution, recovery and review. It does not describe the employer's current system or claim that every component shown here was deployed together.
 
-An engineer selects a standardized Jira ticket and clicks **Deploy**. An AI orchestrator reads the relevant framework instructions (`SKILL.md`), inspects requirements, and calls approved tools via MCP or REST APIs.
+| Grounded in the original work | Specified for this reference design |
+|---|---|
+| Standardized Jira requests and a UI with chat | FastAPI, custom Python runtime and PostgreSQL-backed workers |
+| Framework-specific instructions and MCP/API tool calls | Explicit state transitions, bounded retries and recovery rules |
+| Existing Databricks metadata utilities and generators | Isolated working copies and a defined Git publishing adapter |
+| Legacy DB and SAP BW onboarding; GitLab and Azure DevOps | Version-paired release checks and activation gates |
 
-It aims to prepare a validated **review-ready change**, not to silently deploy into production. If it hits a missing connection, a failed tool, or an ambiguous requirement, it pauses and asks a specific question in the same UI chat.
+No employer code, internal identifiers, real source schemas or production data are reproduced. All examples are synthetic. This is an architecture case study, not a runnable product.
+
+## The system at a glance
 
 ```mermaid
 flowchart TB
-    J["Jira integration request"] --> UI["Web UI<br/>Deploy + exception chat"]
-    UI --> API["Python / FastAPI"]
-    API --> AG["Custom stateful AI orchestrator<br/>OpenAI API + framework skills"]
-    AG <--> PG[("PostgreSQL<br/>session, steps, job state")]
-    AG --> W["Python workers<br/>async jobs + polling"]
-    AG --> T["Guarded MCP / REST tools"]
-    W --> T
-    T --> GL["GitLab<br/>config, schemas, skills"]
-    T --> DB["Databricks<br/>metadata and generators"]
-    T --> ADO["Azure DevOps<br/>ADF definitions"]
-    GL --> REV["Review-ready MR / PR"]
-    ADO --> REV
-    REV --> H["Human review + deployment"]
-    H --> ADF["Azure Data Factory<br/>runtime orchestration"]
-    ADF --> LAKE[("Data Lake<br/>RAW / STAGE")]
+    UI["Engineer / Jira UI"] --> API["API and workflow coordinator"]
+    API <--> DB[("PostgreSQL: state and due work")]
+    W["Python workers"] <--> DB
+    W <--> AI["Model: interpret and propose tools"]
+    W --> T["Validated tool adapters"]
+    T --> D["Databricks utilities and generators"]
+    T --> G["GitLab changes"]
+    T --> A["Azure DevOps changes, when needed"]
+    G --> R["Human review and release gate"]
+    A --> R
 ```
+
+The coordinator owns progress and permissions. The model proposes the next allowed action. Workers execute validated calls and persist their results. Successful preparation ends with review requests; ingestion starts through a separate release process.
 
 ## Two integration patterns
 
-| | Legacy databases | SAP BW file delivery |
+| | Legacy databases | SAP BW |
 |---|---|---|
-| Input | Oracle / SQL Server tables | CSV extracts, schema and transfer flags via FTP |
-| Provisioning | Read source metadata, generate RAW and STAGE mappings, create JSON config | Register interface/country, fetch schema, run existing Python generator |
-| Runtime | **Two ADF pipelines**: source → RAW, RAW → STAGE | **One ADF pipeline** with three Databricks steps |
-| Output | Configuration ready for review | Schemas, transformation SQL and ADF definition ready for review |
+| Source | Oracle / SQL Server tables | Interface files on a shared FTP server |
+| Preparation | Discover metadata; generate two mappings and JSON configuration | Add interface parameters; fetch schema; run the existing Python generator |
+| Generated artifacts | Ingestion configuration and mappings | RAW schema, STAGE schema and RAW-to-STAGE SQL |
+| Runtime | Two ADF pipelines per table: source to RAW, then RAW to STAGE | One ADF pipeline with three Databricks processing steps |
+| Repository boundary | Framework configuration in GitLab | Framework files in GitLab; ADF definitions in Azure DevOps |
 
-The orchestrator can choose tools and react to their results. Python still owns permissions, execution state, validation, retries, and the boundary before deployment.
+An event-based framework existed in the wider platform. This case study deliberately covers only the first two patterns.
 
-## Design decisions
+## Where the engineering decisions matter
 
-- **Custom Python orchestrator, not a multi-agent framework.** There are two well-understood workflows; dynamic AI decisions are bounded by explicit rules.
-- **Direct OpenAI API.** Used for request interpretation, framework/tool selection, and explaining blockers.
-- **PostgreSQL + dedicated worker.** A durable session and job records let a long-running Databricks call finish without keeping an HTTP request open. No message broker in this reference design.
-- **Skills alongside framework documentation.** Versioned `SKILL.md` files describe what each framework needs. They are instructions, not executable code or permission grants.
-- **Human-in-the-loop only on exceptions.** The assistant asks for missing input and resumes after validation; it does not invite arbitrary mid-run edits.
-- **Git as the handoff.** The success criterion is validated artifacts and a merge/pull request. Engineers decide when to merge and deploy.
+- **Reuse the frameworks.** The model does not invent source columns or implement full/merge/watermark semantics.
+- **Make long operations durable.** Save operation identity before submission; reconcile uncertain outcomes instead of blindly repeating them.
+- **Separate instructions from authority.** A pinned skill explains a workflow. Backend policy decides which actions are permitted.
+- **Keep two human checkpoints distinct.** Ask for missing information during preparation; require review and environment approval before release.
+- **Coordinate versions across repositories.** When both repositories change, activate only a validated pair of revisions.
+- **Define success narrowly.** A review-ready change proves preparation checks passed. It does not prove production data quality.
 
-## Read the architecture
+## Read this case study
 
-- [System overview and design trade-offs](docs/architecture.md)
-- [AI orchestration: tools, waiting, recovery and chat](docs/orchestrator.md)
-- [Legacy database framework](docs/legacy-db.md)
-- [SAP BW file-based framework](docs/sap-bw.md)
+| If you have... | Start here |
+|---|---|
+| 3 minutes | This page and [the interview guide](docs/interview-guide.md) |
+| 10 minutes | [Architecture and release boundaries](docs/architecture.md) |
+| A technical deep dive | [Workflow lifecycle and recovery](docs/orchestrator.md) |
+| A framework question | [Legacy DB](docs/legacy-db.md) or [SAP BW](docs/sap-bw.md) |
+| A request for a concrete example | [One synthetic request, end to end](docs/walkthrough.md) |
 
-## Technology map
+## Outcome and evidence
 
-Python · FastAPI · OpenAI API · MCP / REST · PostgreSQL · Azure Container Apps · Databricks · Azure Data Factory · Azure Data Lake · GitLab · Azure DevOps · Azure Key Vault
+The practical benefit is reducing repetitive onboarding work while keeping existing ingestion logic and engineering review. I do not publish a measured time-saving percentage or a reliability benchmark here.
 
-## What this repository is (and isn't)
+For an implementation, I would track active engineering minutes per approved integration, first-review acceptance, blocked-workflow reasons, duplicate external operations and post-release data checks. Comparison should use similar source types and separate hands-on time from waiting for infrastructure or approval.
 
-This is a **system design portfolio piece**, deliberately light on code and focused on decisions, boundaries and data flow. The diagrams describe a proposed implementation; they are not evidence that all components were built, load-tested, or deployed together. No credentials, proprietary integrations, internal schemas, or customer data are included.
+**Reference stack:** Python, FastAPI, OpenAI API, MCP/REST adapters, PostgreSQL, Azure Container Apps, Databricks, Azure Data Factory, Azure Data Lake, GitLab, Azure DevOps and Azure Key Vault. The hosting and persistence choices are proposals, not claims about the original deployment.

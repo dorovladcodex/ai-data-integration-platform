@@ -1,57 +1,97 @@
-# Architecture overview
+# Architecture and release boundaries
 
-The goal is narrow: **turn a standardized Jira request into reviewed integration configuration**. Data ingestion itself remains with the established Azure Data Factory / Databricks frameworks.
+The system prepares integration changes. Existing ADF and Databricks frameworks execute the data pipelines. This separation keeps model decisions out of routine ingestion.
 
 ## Responsibilities
 
-| Component | Owns | Does not own |
-|---|---|---|
-| React UI / FastAPI | Session creation, progress events, exception chat | ETL execution |
-| OpenAI model | Interpreting Jira, selecting a skill/tool, summarizing failures | Credentials, permissions, deployment |
-| Custom Python orchestrator | Allowed transitions, tool dispatch, workflow completion | Making up source schemas |
-| PostgreSQL | Sessions, tool results, jobs, due-work queue, audit | External job execution |
-| Dedicated worker | Running and checking asynchronous operations | Long-lived HTTP requests |
-| Databricks utilities | FTP/schema discovery, mappings, Python generators | Arbitrary LLM-authored operations |
-| GitLab | Framework configs, schemas and generated SQL | Production ADF deployment |
-| Azure DevOps | Versioned ADF definitions and CI/CD | AI model decisions |
+| Component | Responsibility |
+|---|---|
+| UI and FastAPI | Authenticate the engineer; create or reconnect to a workflow; show progress and pending questions |
+| Workflow coordinator | Enforce state transitions, budgets, allowed tools and completion checks |
+| Model | Interpret the request, select a framework and propose permitted calls or a clarification |
+| PostgreSQL | Persist workflow revisions, operations, due work, questions and audit references |
+| Python workers | Claim work, call the model or adapters, poll external jobs and reconcile uncertain outcomes |
+| Tool adapters | Validate arguments, restrict paths and resources, execute approved operations and return structured results |
+| Databricks | Discover metadata, access FTP and run established generators |
+| GitLab | Version framework code, instructions, parameters, schemas, mappings and generated SQL |
+| Azure DevOps | Version ADF definitions and operate the reviewed deployment process |
+| Release controller and engineer | Validate environment-specific revisions, approve release and enable ingestion |
 
-## Deployment boundary
+The API and workers are separate proposed Azure Container Apps workloads. PostgreSQL is the source of durable state. The worker must remain available, or be scheduled independently of incoming HTTP requests; closing the browser does not stop the workflow. Live UI updates are optional notifications, not the durable record.
 
-The AI creates a feature branch from `dev` and prepares validated review changes. For the SAP BW path, the ADF definition may require a corresponding Azure DevOps pull request. The two review items share a change-set ID; they are **not** one atomic Git transaction.
-
-A human reviews, merges and promotes the change through the normal environments. The runtime pipeline is not launched by the AI agent as part of provisioning.
-
-## Two orchestration layers
+## Preparation versus runtime
 
 ```mermaid
-flowchart LR
-    J["Jira + AI provisioning"] --> M["Validated MR / PR"]
-    M --> H["Human approval"]
-    H --> D["ADF deployment"]
-    D --> N["Databricks notebooks"]
-    N --> R[("RAW")]
-    R --> S[("STAGE")]
+flowchart TB
+    subgraph P["Preparation"]
+        J["Jira request"] --> W["AI-assisted workflow"]
+        W --> C["Validated configuration and review requests"]
+    end
+    C --> G["Human review and environment release gate"]
+    subgraph E["Runtime"]
+        G --> A["Azure Data Factory"]
+        A --> N["Databricks processing"]
+        N --> R[("RAW")]
+        R --> S["Databricks transformation"]
+        S --> T[("STAGE")]
+    end
 ```
 
-The provisioning agent and runtime ETL lifecycle should be monitored separately. A successful MR does not prove successful production ingestion.
+RAW and STAGE storage details depend on the framework. ADF coordinates execution; Databricks performs the processing. A failed runtime job is an operational incident, not an instruction to let the provisioning agent change production automatically.
 
-## Main choices and trade-offs
+## GitLab and Azure DevOps are separate repositories
 
-**Why custom Python rather than LangGraph?** With only two constrained workflows, a small state machine is easier to understand and debug. The price is that we must implement durable state transitions, retries, job reconciliation and human pauses ourselves. A durable workflow engine would be reasonable if the workflow catalog or concurrency grew significantly.
+GitLab holds the framework artifacts. Azure DevOps holds ADF definitions. A SAP BW request creates an Azure DevOps PR only if its ADF definition needs to be added or changed. If the existing definition is reused, record the approved revision and compatibility check instead.
 
-**Why PostgreSQL rather than a message broker?** At moderate volume, a database-backed work queue with leases and due timestamps is adequate. Worker claims should use short transactions; no database lock is held during a Databricks run. A separate broker becomes attractive when throughput, isolation or independent consumer groups warrant it.
+A change-set record links the Jira request, workflow revision, GitLab commit/MR, applicable Azure DevOps commit/PR, checks and target environment. The ID provides traceability; it does not make the merges atomic.
 
-**Why not ask the LLM to write the ETL?** Existing frameworks own full/merge/watermark logic, country rules and transformations. LLM decisions are useful for interpreting onboarding requests and responding to exceptional situations; deterministic tools are more reliable for the actual transformation contract.
+### Proposed release protocol
 
-**Why artifact staging?** Databricks outputs are validated as an explicit artifact manifest before a Git adapter commits them. A Git-backed workspace alone is not proof that generated files were committed and pushed.
+1. Review each required change independently. Approval applies to exact revisions; a changed diff invalidates the affected checks and approval.
+2. Resolve the reviewed changes to immutable release revisions. If merging or rebasing changes the resulting content, validate that result.
+3. Record the GitLab revision, ADF revision and validation evidence in an environment-specific release manifest.
+4. Deploy the selected artifacts to the target environment while the affected integration remains inactive.
+5. Check that both deployed revisions match the manifest, then activate that integration. Run smoke/data checks appropriate to that environment.
+6. Promote through dev, test, QAS and production using the normal human approval process. Promote versioned artifacts, not an arbitrary current branch head.
 
-## Security and quality gates
+The release manifest and activation gate are **proposed improvements**, not assertions about the historical platform. An implementation must enforce the gate in the deployment/runtime layer. In particular, a scheduled discovery process must only see released configurations or must check release eligibility before creating or enabling pipelines. A document alone cannot enforce this rule.
 
-- User authentication and authorisation via enterprise identity; least-privilege service access.
-- Credentials in Azure Key Vault, never pasted into prompts or chat.
-- Tool allowlists, argument validation, pinned skill revisions and protected Git branches.
-- Jira stories and source files are treated as untrusted data, not agent instructions.
-- Validate source/target schemas, country mapping, SQL, load mode, paths and Git diffs before opening review requests.
-- Correlate Jira ticket, workflow ID, Databricks run ID, Git commit and review URLs in audit events.
+| Partial outcome | Required behavior |
+|---|---|
+| Only one review is approved | Keep the change unready for release |
+| Only one repository change is merged | Preserve traceability; do not activate the pair |
+| One deployment fails | Keep the new integration inactive; repair or redeploy the approved pair |
+| A deployed revision differs from the manifest | Block activation and revalidate |
+| Smoke checks fail after activation | Pause affected triggers; restore the previous approved artifact pair when safe |
 
-This page is a design proposal, not an attestation of a deployed environment.
+Reverting configuration does not undo data already written. Recovery of data needs its own reconciliation or replay procedure. For changes to an active integration, quiesce new runs and account for in-flight work before switching versions.
+
+## Why these implementation choices?
+
+**Custom Python runtime.** The workflow catalog is narrow. Model calls sit inside an explicit state machine; the model does not own the lifecycle. This avoids adding a framework solely for routing, but durable recovery and human pauses still require engineering. A workflow framework becomes attractive if their maintenance cost or branching complexity grows.
+
+**PostgreSQL-backed work queue.** At modest onboarding volume, short transactional claims, leases and due timestamps are enough for this design. No lock stays open during a Databricks job or model call. A broker would be a future throughput/isolation decision, not a prerequisite.
+
+**Existing generators.** Framework rules and type transformations remain deterministic. AI helps interpret requests and blockers. It is not allowed to bypass validation or introduce unrestricted ETL code.
+
+**MCP and REST.** Both are adapter interfaces. Neither supplies authorization, idempotency or orchestration automatically. The same backend policy applies to either transport.
+
+## Trust and data boundaries
+
+- Authenticate engineers and scope each workflow to allowed environments and resources.
+- Keep credentials in the secret store. Pass references rather than secret values to tools.
+- Pin skill and generator revisions; only trusted, reviewed instructions define the workflow.
+- Treat Jira text, source files and tool output as data. They cannot add tools or expand permissions.
+- Send the model only necessary request metadata and sanitized tool summaries. Credentials and raw business records stay outside model context.
+- Redact logs and persisted tool results too; masking only the prompt is insufficient.
+- Limit repository paths and changes. Reject unrelated edits, unexpected deletions and unapproved destinations.
+- Record actor, workflow revision, operation, external run, commit and approval references.
+
+## Supporting platform documentation
+
+- [Databricks Git folders](https://learn.microsoft.com/en-us/azure/databricks/repos/git-folders-concepts)
+- [Git-backed job source versus workspace Git folders](https://learn.microsoft.com/en-us/azure/databricks/jobs/git)
+- [PostgreSQL row locking and queue consumers](https://www.postgresql.org/docs/current/sql-select.html)
+- [GitLab commit actions](https://docs.gitlab.com/api/commits/)
+
+These references support specific mechanisms. They do not establish that the complete proposed system has been implemented.

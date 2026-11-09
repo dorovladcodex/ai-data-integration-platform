@@ -1,56 +1,79 @@
-# SAP BW file-based integration
+# SAP BW onboarding
 
-The upstream SAP BW team delivers files to a shared FTP server. Each interface has its own folder, usually for one country; a special multi-country interface may be mapped differently.
+SAP BW delivers interface files to a shared FTP server. The framework prepares file-based RAW data and transforms it into STAGE tables.
 
-## File delivery
+## The process behind this case study
 
-Typical interface files:
+An engineer adds interface-specific rows or parameters and runs an existing Python script to generate the required files. The framework artifacts belong to GitLab. The ADF pipeline definitions belong to a separate Git repository in Azure DevOps.
 
-| File | Meaning |
+The AI-assisted path preserves that mechanism: create a feature branch from dev, attach a Databricks Git working copy to that branch, update the permitted parameters and run the existing generator there. Generated files remain in that working copy until validated and published to the same remote feature branch.
+
+## Preparation
+
+```mermaid
+flowchart TB
+    A["Jira request and pinned SAP BW skill"] --> B["GitLab feature branch from dev"]
+    B --> C["Isolated Databricks Git working copy"]
+    C --> D["Existing FTP notebook retrieves schema"]
+    D --> E["Update interface rows / parameters"]
+    E --> F["Run existing Python generator"]
+    F --> G["RAW schema, STAGE schema, transformation SQL"]
+    G --> V["Validate files and publish to same branch"]
+    V --> M["GitLab MR"]
+    V --> Q{"ADF definition change required?"}
+    Q -->|Yes| P["Azure DevOps PR"]
+    Q -->|No| R["Record approved ADF revision"]
+    M --> H["Review-ready change set"]
+    P --> H
+    R --> H
+```
+
+The FTP access is through the established Databricks notebook. ADF file copy is not substituted for that provisioning step.
+
+### Working copy and publication
+
+The reference design uses one working copy per workflow revision, with the branch and generator revision recorded before execution. Concurrent requests must not switch branches in a shared folder.
+
+After generation, validation produces a manifest of allowed file paths and content hashes. This is a description of the files, not a second artifact repository or a new output-copy stage.
+
+For this reference design, a constrained publishing adapter reads the validated small text files from that working copy and uses a GitLab batch commit to publish them to the same feature branch. The adapter verifies remote content and records the resulting SHA before opening the MR. This publishing implementation is a proposed choice, not a claim about the original commit mechanism.
+
+The branch is workflow-owned during preparation. Check for unexpected edits before publication, use applicable provider file-conflict checks and verify the resulting diff. A conflict stops publication; there is no force-push. If a timeout leaves the outcome unknown, look for the matching commit before retrying. After successful publication, the temporary working copy can be retired; do not continue using an unsynchronized dirty copy.
+
+A Databricks workspace Git folder and a job configured with a remote Git source have different file-write behavior. This generation path requires a writable workspace working copy and a supported runtime configuration. Merely setting a job's remote Git branch is not an equivalent implementation.
+
+## File delivery and runtime
+
+| File | Purpose |
 |---|---|
-| START flag | File transfer has started |
-| Schema file | Source fields and types |
-| CSV file | Extracted data |
-| END flag | Completion state, e.g. Complete / Error |
+| START flag | Marks the start of a delivery |
+| Schema file | Describes source fields and types |
+| CSV file | Contains the extracted records |
+| END flag | Indicates the transfer outcome |
 
-The receiving pipeline should not treat a partially delivered file as ready. For production use, it should verify the relevant completion indicator, expected files, batch identity and duplicate-delivery handling.
-
-## Provisioning
+Exact flag names and status values are interface-specific; no literal corporate file contract is reproduced.
 
 ```mermaid
-flowchart TD
-    A["Jira: SAP BW interface"] --> B["SAP BW SKILL.md"]
-    B --> C["GitLab branch from dev"]
-    C --> D["Databricks FTP utility: fetch schema"]
-    D --> E["Update interface parameters"]
-    E --> F["Databricks executes Python generator"]
-    F --> G["RAW schema"]
-    F --> H["STAGE schema"]
-    F --> I["RAW → STAGE SQL"]
-    G --> V["Validate generated artifacts"]
-    H --> V
-    I --> V
-    V --> K["Commit to GitLab feature branch"]
-    K --> L["Prepare ADF definition in Azure DevOps"]
-    L --> M["GitLab MR + Azure DevOps PR"]
-    M --> N["Human approval and deployment"]
+flowchart TB
+    FTP["Shared FTP interface folder"] --> N1["1. Transfer to internal storage"]
+    ADF["One ADF pipeline"] -.-> N1
+    ADF -.-> N2["2. Prepare / load file-based RAW"]
+    ADF -.-> N3["3. Transform to Delta STAGE"]
+    N1 --> N2
+    N2 --> N3
+    N3 --> ST[("STAGE tables")]
 ```
 
-The Python generator replaces repetitive manual edits once performed from VS Code. In the reference design, artifacts are validated and committed through a controlled Git adapter. This avoids assuming that a Databricks Git folder automatically pushes newly created files.
+Solid arrows show processing order and data movement; dotted arrows show ADF orchestration. All three numbered steps are Databricks processing steps.
 
-## Runtime
+Before accepting a batch, validate the completion signal, expected files and batch identity. Duplicate delivery, incomplete transfer and changed schema need explicit framework handling. These are reference-design acceptance requirements, not claims that every case was already solved.
 
-```mermaid
-flowchart LR
-    FTP["SAP BW FTP delivery"] --> ADF["One ADF pipeline"]
-    ADF --> N1["1. Transfer to internal storage"]
-    N1 --> N2["2. Load file-based RAW"]
-    N2 --> N3["3. Transform to Delta STAGE"]
-    N3 --> LAKE[("Data Lake")]
-```
+Several country-specific interfaces may feed one target table. The configuration maps interfaces to countries and partition rules. A multi-country interface must preserve actual row-level country values instead of replacing them with an interface marker.
 
-The ADF pipeline invokes three Databricks processing steps and includes error monitoring. The generated transformation adds technical fields and country-aware partitioning. Several country-specific interfaces can feed one target table. A multi-country marker must not automatically overwrite actual country values in the data.
+If an interface uses update/delete indicators or ordered change records, document and validate those semantics explicitly. The generic diagram does not establish how that source-specific contract behaves.
 
-## Repository split
+## Coordinating the ADF definition
 
-GitLab tracks interface settings, source schema and generated SQL. Azure DevOps tracks ADF pipeline definitions and their review/deployment workflow. A shared change-set ID links both reviews, but their merges are separate operations.
+When onboarding requires a new or changed ADF definition, prepare a separate Azure DevOps PR. Reusing an unchanged compatible definition needs no artificial PR, but does need its revision recorded.
+
+Both paths follow the [release protocol](architecture.md#proposed-release-protocol): reviewed revisions, environment validation and activation only after compatible artifacts are deployed. The agent prepares changes; the release process decides when they run.
