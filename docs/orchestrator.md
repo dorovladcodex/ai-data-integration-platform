@@ -11,33 +11,28 @@ Model output never grants permission. Deterministic checks decide whether prepar
 ```mermaid
 stateDiagram-v2
     direction TB
-    [*] --> RUNNING: Authorized request accepted
-    RUNNING --> WAITING_FOR_JOB: External run recorded
-    WAITING_FOR_JOB --> RUNNING: Successful result validated
-    WAITING_FOR_JOB --> FAILED: Fatal failure or deadline
-    RUNNING --> WAITING_FOR_HUMAN: Required input missing
-    WAITING_FOR_HUMAN --> RUNNING: Current answer validated
-    WAITING_FOR_HUMAN --> FAILED: Response deadline exceeded
-    RUNNING --> VALIDATING: Artifact set complete
-    VALIDATING --> RUNNING: Bounded repair permitted
-    VALIDATING --> FAILED: Invalid or unsafe output
+    [*] --> RUNNING
+    RUNNING --> WAITING_FOR_JOB: Job submitted
+    WAITING_FOR_JOB --> RUNNING: Result validated
+    RUNNING --> WAITING_FOR_HUMAN: Input needed
+    WAITING_FOR_HUMAN --> RUNNING: Answer validated
+    RUNNING --> VALIDATING: Artifacts complete
+    VALIDATING --> RUNNING: Bounded repair
     VALIDATING --> PUBLISHING_REVIEW: Checks passed
-    PUBLISHING_REVIEW --> READY_FOR_REVIEW: All required reviews verified
-    PUBLISHING_REVIEW --> FAILED: Unrecoverable publication failure
-    RUNNING --> FAILED: Policy or execution failure
-    RUNNING --> CANCELLING: Cancel requested
-    WAITING_FOR_JOB --> CANCELLING: Cancel requested
-    WAITING_FOR_HUMAN --> CANCELLING: Cancel requested
-    VALIDATING --> CANCELLING: Cancel requested
-    PUBLISHING_REVIEW --> CANCELLING: Cancel requested
-    CANCELLING --> CANCELLED: External outcomes reconciled
-    CANCELLING --> FAILED: Reconciliation deadline exceeded
+    PUBLISHING_REVIEW --> READY_FOR_REVIEW: Reviews verified
     READY_FOR_REVIEW --> [*]
-    FAILED --> [*]
-    CANCELLED --> [*]
 ```
 
-Transient retry attempts are operation records inside a state, not new workflows. The diagram omits those self-transitions. A policy violation fails closed; a human reply cannot override the tool allowlist. READY_FOR_REVIEW is terminal for preparation. Approval, merging and deployment belong to the separate release lifecycle.
+The diagram shows normal progress and recoverable pauses. Shared failure and cancellation transitions are listed below to keep the lifecycle readable.
+
+| From | Event | To |
+|---|---|---|
+| Any non-terminal preparation state | Unrecoverable error, policy violation or exhausted deadline/budget | FAILED |
+| RUNNING, either WAITING state, VALIDATING or PUBLISHING_REVIEW | Authorized cancellation | CANCELLING |
+| CANCELLING | Outstanding external outcomes reconciled | CANCELLED |
+| CANCELLING | Reconciliation deadline exceeded | FAILED, with outstanding operations recorded |
+
+Transient retries are operation records inside a state, not new workflows. A human reply cannot override the tool allowlist. READY_FOR_REVIEW, FAILED and CANCELLED are terminal for preparation. Approval, merging and deployment belong to the separate release lifecycle.
 
 ## Long operations
 
