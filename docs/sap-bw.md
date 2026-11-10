@@ -4,7 +4,7 @@ SAP BW delivers interface files to a shared FTP server. The framework prepares f
 
 ## The process behind this case study
 
-An engineer adds interface-specific rows or parameters and runs an existing Python script to generate the required files. The framework artifacts belong to GitLab. The ADF pipeline definitions belong to a separate Git repository in Azure DevOps.
+An engineer adds interface-specific rows or parameters and runs an existing Python script to generate the required files. The framework artifacts belong to GitLab. The ADF pipeline definitions belong to a separate Git repository in Azure DevOps. Each interface gets a dedicated pipeline whose name includes the interface name. Pipelines share the same structure, with different parameters for the interface, target table and source filename on FTP.
 
 The AI-assisted path preserves that mechanism: create a feature branch from dev, attach a Databricks Git working copy to that branch, update the permitted parameters and run the existing generator there. Generated files remain in that working copy until validated and published to the same remote feature branch.
 
@@ -20,12 +20,9 @@ flowchart TB
     F --> G["RAW schema, STAGE schema, transformation SQL"]
     G --> V["Validate files and publish to same branch"]
     V --> M["GitLab MR"]
-    V --> Q{"ADF definition change required?"}
-    Q -->|Yes| P["Azure DevOps PR"]
-    Q -->|No| R["Record approved ADF revision"]
+    V --> P["Azure DevOps PR: dedicated interface pipeline"]
     M --> H["Review-ready change set"]
     P --> H
-    R --> H
 ```
 
 The FTP access is through the established Databricks notebook. ADF file copy is not substituted for that provisioning step.
@@ -56,7 +53,7 @@ Exact flag names and status values are interface-specific; no literal corporate 
 ```mermaid
 flowchart TB
     FTP["Shared FTP interface folder"] --> N1["1. Transfer to internal storage"]
-    ADF["One ADF pipeline"] -.-> N1
+    ADF["One dedicated ADF pipeline per interface"] -.-> N1
     ADF -.-> N2["2. Prepare / load file-based RAW"]
     ADF -.-> N3["3. Transform to Delta STAGE"]
     N1 --> N2
@@ -74,6 +71,6 @@ If an interface uses update/delete indicators or ordered change records, documen
 
 ## Coordinating the ADF definition
 
-When onboarding requires a new or changed ADF definition, prepare a separate Azure DevOps PR. Reusing an unchanged compatible definition needs no artificial PR, but does need its revision recorded.
+For every new SAP BW interface, prepare a separate Azure DevOps PR containing its dedicated pipeline definition. Reuse the framework's pipeline structure and set the interface-specific parameters; do not substitute one shared runtime pipeline for all interfaces.
 
-Both paths follow the [release protocol](architecture.md#proposed-release-protocol): reviewed revisions, environment validation and activation only after compatible artifacts are deployed. The agent prepares changes; the release process decides when they run.
+The GitLab MR and Azure DevOps PR follow the [release protocol](architecture.md#proposed-release-protocol): reviewed revisions, environment validation and activation only after compatible artifacts are deployed. The agent prepares changes; the release process decides when they run.

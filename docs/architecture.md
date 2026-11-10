@@ -41,7 +41,9 @@ RAW and STAGE storage details depend on the framework. ADF coordinates execution
 
 ## GitLab and Azure DevOps are separate repositories
 
-GitLab holds the framework artifacts. Azure DevOps holds ADF definitions. A SAP BW request creates an Azure DevOps PR only if its ADF definition needs to be added or changed. If the existing definition is reused, record the approved revision and compatibility check instead.
+GitLab holds the framework artifacts. Azure DevOps holds ADF definitions. Every new SAP BW interface has its own ADF pipeline, with the interface name included in the pipeline name. The structure is shared across the framework; the interface name, target table and source filename on FTP are parameterized. Onboarding a new SAP BW interface therefore prepares both a GitLab MR and an Azure DevOps PR for its dedicated pipeline definition.
+
+Routine legacy database onboarding can reuse the existing ADF generator without changing its definition. In that case, record the approved ADF revision and compatibility check rather than creating an unnecessary PR.
 
 A change-set record links the Jira request, workflow revision, GitLab commit/MR, applicable Azure DevOps commit/PR, checks and target environment. The ID provides traceability; it does not make the merges atomic.
 

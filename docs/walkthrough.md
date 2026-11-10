@@ -12,6 +12,8 @@ This is a synthetic SAP BW example illustrating the proposed contracts. Names, p
 | Target | stage.demo_sales |
 | Country / partition | DE / country_code |
 | Connection reference | ftp-demo-ref |
+| ADF pipeline name | sap_bw_DEMO_SALES_DE |
+| FTP source filename | demo_sales_de.csv |
 | Requirement | Onboard the interface using the existing framework; prepare the required ADF definition |
 
 The ticket does not contain a password, host address or real data. Schema fields come from the discovery tool, not the model.
@@ -85,7 +87,7 @@ The workflow prepares an isolated working copy attached to feature/demo-142 from
 | schemas/stage/demo_sales.json | Generated STAGE schema |
 | transformations/demo_sales.sql | Generated RAW-to-STAGE transformation |
 
-These paths are illustrative, not a reconstruction of an internal repository layout. A manifest records exact paths and hashes. The publishing adapter reads the validated files in the working copy and creates the GitLab commit. For this example a new ADF definition is required, so the workflow also prepares an Azure DevOps PR.
+These paths are illustrative, not a reconstruction of an internal repository layout. A manifest records exact paths and hashes. The publishing adapter reads the validated files in the working copy and creates the GitLab commit. As with every new SAP BW interface, the workflow also prepares an Azure DevOps PR for a dedicated pipeline. Its synthetic name is sap_bw_DEMO_SALES_DE. It uses the shared framework structure with parameters for DEMO_SALES_DE, stage.demo_sales and demo_sales_de.csv.
 
 ## 6. What passes and what fails
 

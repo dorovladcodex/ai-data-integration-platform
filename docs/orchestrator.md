@@ -91,7 +91,7 @@ READY_FOR_REVIEW requires all of the following:
 - The expected artifact manifest matches the actual changed files.
 - Deterministic validation has passed for the recorded revisions.
 - Remote commits exist and match the reviewed content.
-- Every required MR/PR exists and is linked; reused ADF revisions are documented.
+- Every required MR/PR exists and is linked. New SAP BW interfaces require both GitLab and Azure DevOps reviews; requests that do not change ADF, such as routine legacy onboarding, record the existing approved ADF revision.
 - There are no unresolved blockers or unknown publication outcomes.
 
 It does not imply reviewer acceptance, deployment or successful production ingestion.

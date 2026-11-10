@@ -7,7 +7,7 @@ This case study shows how an AI orchestrator can handle that preparation by call
 
 ## Experience behind the design
 
-I contributed to the design and initial rollout of AI-assisted onboarding for two enterprise integration frameworks: legacy databases and SAP BW file delivery. Both were brought into use during my involvement. The early workflows worked, encountered errors and required engineering intervention.
+I participated across the full delivery cycle of AI-assisted onboarding for two enterprise integration frameworks: legacy databases and SAP BW file delivery. My involvement included technical discussions, planning, design, invoking jobs and supporting the initial rollout. Both were brought into use during my involvement. The early workflows worked, encountered errors and required engineering intervention.
 
 This portfolio reconstructs the integration patterns at a generic level and proposes a more explicit design for durable execution, recovery and review. It does not describe the employer's current system or claim that every component shown here was deployed together.
 
@@ -45,8 +45,10 @@ The coordinator owns progress and permissions. The model proposes the next allow
 | Source | Oracle / SQL Server tables | Interface files on a shared FTP server |
 | Preparation | Discover metadata; generate two mappings and JSON configuration | Add interface parameters; fetch schema; run the existing Python generator |
 | Generated artifacts | Ingestion configuration and mappings | RAW schema, STAGE schema and RAW-to-STAGE SQL |
-| Runtime | Two ADF pipelines per table: source to RAW, then RAW to STAGE | One ADF pipeline with three Databricks processing steps |
-| Repository boundary | Framework configuration in GitLab | Framework files in GitLab; ADF definitions in Azure DevOps |
+| Runtime | Two ADF pipelines per table: source to RAW, then RAW to STAGE | One dedicated ADF pipeline per interface, with three Databricks processing steps |
+| Repository boundary | Framework configuration in GitLab | Framework files in GitLab; interface-specific ADF definitions in Azure DevOps |
+
+SAP BW pipelines share the same structure. Each pipeline name contains the interface name, and its parameters identify the interface, target table and source filename on FTP.
 
 An event-based framework existed in the wider platform. This case study deliberately covers only the first two patterns.
 
