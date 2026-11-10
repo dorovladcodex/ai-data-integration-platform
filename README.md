@@ -1,26 +1,23 @@
 # AI-Assisted Data Integration
-### From a Jira request to a review-ready integration change
 
-Onboarding a data source often involves more manual coordination than new ETL code: read the request, check a connection, discover the schema, prepare mappings, update configuration and send the changes for review.
+**An enterprise architecture case study on turning Jira requests into review-ready data integration changes.**
 
-This case study shows how an AI orchestrator can handle that preparation by calling existing data engineering tools. The ingestion frameworks remain responsible for moving and transforming data.
+I helped design and roll out AI-assisted onboarding for two enterprise frameworks: **legacy database ingestion** and **SAP BW file delivery**. I contributed across technical discussions, planning, workflow design, Databricks job invocation and initial rollout. Both workflows went live during my involvement.
 
-## Experience behind the design
+## The problem
 
-I participated across the full delivery cycle of AI-assisted onboarding for two enterprise integration frameworks: legacy databases and SAP BW file delivery. My involvement included technical discussions, planning, design, invoking jobs and supporting the initial rollout. Both were brought into use during my involvement. The early workflows worked, encountered errors and required engineering intervention.
+Onboarding a new source meant checking access, discovering schemas, preparing mappings or parameters, running generators and coordinating changes across repositories. We used an AI orchestrator to interpret standardized Jira requests, read framework-specific instructions and invoke existing engineering tools through MCP and APIs.
 
-This portfolio reconstructs the integration patterns at a generic level and proposes a more explicit design for durable execution, recovery and review. It does not describe the employer's current system or claim that every component shown here was deployed together.
+## Two workflows
 
-| Grounded in the original work | Specified for this reference design |
-|---|---|
-| Standardized Jira requests and a UI with chat | FastAPI, custom Python runtime and PostgreSQL-backed workers |
-| Framework-specific instructions and MCP/API tool calls | Explicit state transitions, bounded retries and recovery rules |
-| Existing Databricks metadata utilities and generators | Isolated working copies and a defined Git publishing adapter |
-| Legacy DB and SAP BW onboarding; GitLab and Azure DevOps | Version-paired release checks and activation gates |
+| | Legacy databases | SAP BW |
+|---|---|---|
+| Input | Oracle and SQL Server tables | Interface files on a shared FTP server |
+| Preparation | Discover metadata and generate mappings and configuration | Fetch the interface schema with a Databricks notebook and run the existing Python generator in a GitLab working copy |
+| Runtime | Two ADF pipelines per table, from source to RAW and from RAW to STAGE | One dedicated ADF pipeline per interface, using a common structure and parameters for the interface, target table and FTP filename |
+| Review | Framework configuration in GitLab | Framework artifacts in GitLab and the interface-specific ADF definition in Azure DevOps |
 
-No employer code, internal identifiers, real source schemas or production data are reproduced. All examples are synthetic. This is an architecture case study, not a runnable product.
-
-## The system at a glance
+## Reference architecture
 
 ```mermaid
 flowchart TB
@@ -36,45 +33,15 @@ flowchart TB
     A --> R
 ```
 
-The coordinator owns progress and permissions. The model proposes the next allowed action. Workers execute validated calls and persist their results. Successful preparation ends with review requests; ingestion starts through a separate release process.
+The public design adds explicit workflow state, retries, recovery and release controls to the integration patterns above. It uses synthetic examples and generalizes internal implementation details.
 
-## Two integration patterns
+- **Deterministic generation.** The model interprets the request and proposes actions. Existing utilities handle schema discovery, mappings and artifact generation.
+- **Durable execution.** Workers record operation identity before submission and reconcile uncertain outcomes before retrying.
+- **Human review and release.** Changes are reviewed in their respective repositories. The proposed release gate activates compatible revisions together.
 
-| | Legacy databases | SAP BW |
-|---|---|---|
-| Source | Oracle / SQL Server tables | Interface files on a shared FTP server |
-| Preparation | Discover metadata; generate two mappings and JSON configuration | Add interface parameters; fetch schema; run the existing Python generator |
-| Generated artifacts | Ingestion configuration and mappings | RAW schema, STAGE schema and RAW-to-STAGE SQL |
-| Runtime | Two ADF pipelines per table: source to RAW, then RAW to STAGE | One dedicated ADF pipeline per interface, with three Databricks processing steps |
-| Repository boundary | Framework configuration in GitLab | Framework files in GitLab; interface-specific ADF definitions in Azure DevOps |
+## Explore the design
 
-SAP BW pipelines share the same structure. Each pipeline name contains the interface name, and its parameters identify the interface, target table and source filename on FTP.
-
-An event-based framework existed in the wider platform. This case study deliberately covers only the first two patterns.
-
-## Where the engineering decisions matter
-
-- **Reuse the frameworks.** The model does not invent source columns or implement full/merge/watermark semantics.
-- **Make long operations durable.** Save operation identity before submission; reconcile uncertain outcomes instead of blindly repeating them.
-- **Separate instructions from authority.** A pinned skill explains a workflow. Backend policy decides which actions are permitted.
-- **Keep two human checkpoints distinct.** Ask for missing information during preparation; require review and environment approval before release.
-- **Coordinate versions across repositories.** When both repositories change, activate only a validated pair of revisions.
-- **Define success narrowly.** A review-ready change proves preparation checks passed. It does not prove production data quality.
-
-## Read this case study
-
-| If you have... | Start here |
-|---|---|
-| 3 minutes | This page and [the interview guide](docs/interview-guide.md) |
-| 10 minutes | [Architecture and release boundaries](docs/architecture.md) |
-| A technical deep dive | [Workflow lifecycle and recovery](docs/orchestrator.md) |
-| A framework question | [Legacy DB](docs/legacy-db.md) or [SAP BW](docs/sap-bw.md) |
-| A request for a concrete example | [One synthetic request, end to end](docs/walkthrough.md) |
-
-## Outcome and evidence
-
-The practical benefit is reducing repetitive onboarding work while keeping existing ingestion logic and engineering review. I do not publish a measured time-saving percentage or a reliability benchmark here.
-
-For an implementation, I would track active engineering minutes per approved integration, first-review acceptance, blocked-workflow reasons, duplicate external operations and post-release data checks. Comparison should use similar source types and separate hands-on time from waiting for infrastructure or approval.
-
-**Reference stack:** Python, FastAPI, OpenAI API, MCP/REST adapters, PostgreSQL, Azure Container Apps, Databricks, Azure Data Factory, Azure Data Lake, GitLab, Azure DevOps and Azure Key Vault. The hosting and persistence choices are proposals, not claims about the original deployment.
+- [System architecture and release controls](docs/architecture.md)
+- [Workflow lifecycle and failure recovery](docs/orchestrator.md)
+- [Legacy database onboarding](docs/legacy-db.md) and [SAP BW onboarding](docs/sap-bw.md)
+- [End-to-end SAP BW walkthrough](docs/walkthrough.md)
