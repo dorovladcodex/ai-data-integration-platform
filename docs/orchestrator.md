@@ -1,63 +1,97 @@
-# AI orchestrator: the part that matters
+# Workflow lifecycle and recovery
 
-This is a **single-agent, tool-driven workflow**, not a swarm of agents. The model can interpret a requirement, choose an allowed tool and inspect the result. Python controls the execution boundaries.
+One logical workflow can include several model calls, external jobs and a human pause. Its identity and state live in PostgreSQL. An HTTP connection or model conversation is not the execution engine.
 
-## Session lifecycle
+## The bounded agent loop
+
+The coordinator selects tools allowed for the current state and pinned skill. A worker asks the model for a structured proposal, validates that proposal and invokes the appropriate adapter. The adapter returns a typed result. The coordinator then decides whether to continue, wait, request input or fail.
+
+Model output never grants permission. Deterministic checks decide whether preparation is complete.
 
 ```mermaid
-flowchart TD
-    A["Deploy Jira ticket"] --> B["Create persistent session"]
-    B --> C["Read Jira, classify framework"]
-    C --> D["Load pinned SKILL.md"]
-    D --> E["AI chooses permitted tool"]
-    E --> F["Python validates and executes"]
-    F --> G{"Result"}
-    G -->|"Short operation succeeded"| E
-    G -->|"Long Databricks job"| W["Save run ID and wait"]
-    W --> P["Worker polls job status"]
-    P -->|"Running"| W
-    P -->|"Completed"| V["Validate output"]
-    V --> E
-    G -->|"Missing input / ambiguous / out of scope"| H["WAITING_FOR_HUMAN"]
-    H --> Q["Ask in frontend chat"]
-    Q --> R["Engineer supplies information"]
-    R --> T["Validate answer and resume"]
-    T --> E
-    E --> Z{"Acceptance criteria met?"}
-    Z -->|"Not yet"| E
-    Z -->|"Yes"| M["Open review request"]
-    M --> END["READY_FOR_REVIEW"]
+stateDiagram-v2
+    direction TB
+    [*] --> RUNNING
+    RUNNING --> WAITING_FOR_JOB: Job submitted
+    WAITING_FOR_JOB --> RUNNING: Result validated
+    RUNNING --> WAITING_FOR_HUMAN: Input needed
+    WAITING_FOR_HUMAN --> RUNNING: Answer validated
+    RUNNING --> VALIDATING: Artifacts complete
+    VALIDATING --> RUNNING: Bounded repair
+    VALIDATING --> PUBLISHING_REVIEW: Checks passed
+    PUBLISHING_REVIEW --> READY_FOR_REVIEW: Reviews verified
+    READY_FOR_REVIEW --> [*]
 ```
 
-The graph is a conceptual illustration. A real implementation must cap tool iterations, retries and cost. Terminal success is decided by deterministic validation and review-request creation, **not** by the LLM saying it is finished.
+The diagram shows normal progress and recoverable pauses. Shared failure and cancellation transitions are listed below to keep the lifecycle readable.
 
-## Long-running Databricks operations
+| From | Event | To |
+|---|---|---|
+| Any non-terminal preparation state | Unrecoverable error, policy violation or exhausted deadline/budget | FAILED |
+| RUNNING, either WAITING state, VALIDATING or PUBLISHING_REVIEW | Authorized cancellation | CANCELLING |
+| CANCELLING | Outstanding external outcomes reconciled | CANCELLED |
+| CANCELLING | Reconciliation deadline exceeded | FAILED, with outstanding operations recorded |
 
-1. Create a durable operation record with a stable idempotency key.
-2. Submit the allowed Databricks job; store its external `run_id`.
-3. Move the workflow to `WAITING_FOR_JOB`; release the worker.
-4. A separate worker claims due checks from PostgreSQL, queries the same run, and reschedules if still running.
-5. On terminal success, fetch a small result or artifact URI and validate it. On failure, apply a bounded policy and/or ask the engineer.
-6. Feed structured output into the agent loop if a new decision is needed.
+Transient retries are operation records inside a state, not new workflows. A human reply cannot override the tool allowlist. READY_FOR_REVIEW, FAILED and CANCELLED are terminal for preparation. Approval, merging and deployment belong to the separate release lifecycle.
 
-Polling does not repeatedly invoke OpenAI. On restart, a recovery worker reconciles persisted external jobs rather than launching duplicates. For the ambiguous submit-then-timeout window, use external idempotency tokens where supported and reconcile before retrying.
+## Long operations
 
-## A chat that pauses only when needed
+1. Persist an operation ID, canonical arguments, input revision and idempotency key before submitting.
+2. Claim the operation under a short lease. Submit the approved Databricks job with the same external token on transport retries.
+3. Persist the returned run ID. Release the worker and schedule the next status check.
+4. A worker claims the due check and queries that run. Polling does not call the model.
+5. On completion, validate the returned metadata or files before advancing the workflow. On failure, classify the cause and apply a bounded retry, clarification or failure policy.
+6. If submission timed out, reconcile with the external service before creating a different execution attempt.
 
-The chat is **exception-driven**, not a free-form remote control of an active job.
+Databricks [run-now](https://docs.databricks.com/api/jobs/v2/run-now) supports an idempotency token that returns the existing run for repeated requests with that token. A deliberate rerun after a confirmed failed job is a new recorded attempt with a new token. This mechanism does not guarantee exactly-once effects for the entire workflow.
 
-Example: a connection reference exists but the secret is missing. The orchestrator posts: *“I couldn't validate this connection. Please provision its secret and send me the reference name (not the password).”* The workflow moves to `WAITING_FOR_HUMAN`. When an authorised engineer replies, the backend validates the reference, records the reply, and resumes the same persistent workflow.
+## Human input and mandatory approval
 
-The browser can close without cancelling the run. The OpenAI API calls are individually short-lived: the **logical session lives in PostgreSQL**, not in an indefinitely open model connection.
+An exception question might ask an engineer to provision a missing secret and provide its reference. The workflow stores a question ID, required fields, permitted responder and expected revision.
 
-## State and recovery
+The reply must match the current question and revision. Validate the reference through the tool, not by accepting the user's assertion alone. Expired or duplicate replies do not resume execution. A changed requirement creates a new workflow revision and invalidates affected outputs.
 
-Keep conversation messages, workflow state and external execution state related by a common session ID but stored separately. Important fields include step, revision, skill commit, allowed tools, operation key, external run ID, last verified result, retry count, and pending human question.
+Review approval is different: every release needs human approval even when preparation required no questions. The UI action should be named **Prepare integration**; it does not promise production deployment.
 
-Use short transactional claims/leases for worker coordination, unique operation keys, bounded retries, optimistic state versioning and a reconciliation scan for expired leases. Never hold a PostgreSQL transaction open while waiting for an external job.
+## Failure policy
 
-## Where AI ends
+| Condition | Action |
+|---|---|
+| Timeout, rate limit or temporary service error | Bounded retries with backoff and jitter; reuse the same operation identity |
+| Missing connection or ambiguous source/target | Ask a specific question and wait |
+| Unsupported framework or forbidden tool arguments | Stop with an actionable reason; do not ask the model to bypass policy |
+| Invalid generated artifacts | Allow only a bounded, explicitly supported repair; otherwise fail |
+| Changed source schema or edited branch | Invalidate stale checks and regenerate/review against a new revision |
+| No human reply or stalled external job | Enforce a configurable deadline and record the outstanding external state |
+| Cancellation | Stop new dispatch; cancel permitted external work where possible and reconcile in-flight results |
 
-Before any Git write, validate generated content with ordinary parsers and framework-specific rules. No arbitrary shell execution, direct writes to protected branches or autonomous production deployments. The last automated action is to create a **review-ready** change set.
+Retries, model turns, token/cost budget, job duration and human-response deadlines are configuration values. Their numerical limits should be chosen from workload evidence, not invented for this case study. A FAILED outcome may still have an external job to reconcile; it must never be described as proof that all side effects were undone.
 
-This is an illustrative implementation design; it does not claim a particular workflow engine ran in the original environment.
+## Recovery cases that must work
+
+| Failure window | Recovery rule |
+|---|---|
+| Duplicate click for the same Jira revision | Return the existing active workflow; an intentional rerun has an explicit new revision |
+| Submission accepted, response lost | Reuse the operation token and reconcile the existing external run |
+| Worker dies during a job | Reclaim due work; poll the recorded run rather than submitting again |
+| Worker lease expires while a call is still running | Reject stale state writes; use external idempotency/concurrency controls before repeating side effects |
+| Git commit or review created, result not saved | Locate it by branch, change-set and content identity; verify before repeating |
+| GitLab MR exists but Azure DevOps PR creation fails | Retain the MR and retry only the missing publication step; do not report readiness |
+| Requirements change during a human pause | Reject stale answers and revalidate affected steps |
+
+Database leases alone cannot fence an already-running external request. Use single-writer ownership of each change branch, provider conflict checks and idempotent adapters. Unexpected external edits block publishing. Never force-push over them.
+
+Persist conversation, workflow and external-operation records separately, linked by workflow ID and revision. Audit sanitized evidence, not secret payloads. Cleanup only workflow-owned temporary resources after outcomes have been reconciled.
+
+## Readiness contract
+
+READY_FOR_REVIEW requires all of the following:
+
+- Required inputs and applicable mappings are complete.
+- The expected artifact manifest matches the actual changed files.
+- Deterministic validation has passed for the recorded revisions.
+- Remote commits exist and match the reviewed content.
+- Every required MR/PR exists and is linked. New SAP BW interfaces require both GitLab and Azure DevOps reviews; requests that do not change ADF, such as routine legacy onboarding, record the existing approved ADF revision.
+- There are no unresolved blockers or unknown publication outcomes.
+
+It does not imply reviewer acceptance, deployment or successful production ingestion.
